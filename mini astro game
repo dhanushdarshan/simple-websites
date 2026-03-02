@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Airplane Shooter</title>
+<style>
+body {
+  margin: 0;
+  overflow: hidden;
+  background: black;
+}
+
+#game {
+  width: 400px;
+  height: 600px;
+  background: #111;
+  margin: auto;
+  position: relative;
+  overflow: hidden;
+  border: 2px solid white;
+}
+
+#plane {
+  width: 40px;
+  height: 40px;
+  background: cyan;
+  position: absolute;
+  bottom: 20px;
+  left: 180px;
+}
+
+.bullet {
+  width: 5px;
+  height: 10px;
+  background: yellow;
+  position: absolute;
+}
+
+.asteroid {
+  width: 40px;
+  height: 40px;
+  background: brown;
+  border-radius: 50%;
+  position: absolute;
+}
+</style>
+</head>
+<body>
+
+<div id="game">
+  <div id="plane"></div>
+</div>
+
+<script>
+const game = document.getElementById("game");
+const plane = document.getElementById("plane");
+
+let planeX = 180;
+let speed = 2;
+let asteroidSpeed = 2;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft" && planeX > 0) {
+    planeX -= 20;
+  }
+  if (e.key === "ArrowRight" && planeX < 360) {
+    planeX += 20;
+  }
+  if (e.key === " ") {
+    shoot();
+  }
+  plane.style.left = planeX + "px";
+});
+
+function shoot() {
+  let bullet = document.createElement("div");
+  bullet.classList.add("bullet");
+  bullet.style.left = (planeX + 18) + "px";
+  bullet.style.bottom = "60px";
+  game.appendChild(bullet);
+
+  let moveBullet = setInterval(() => {
+    let bottom = parseInt(bullet.style.bottom);
+    bullet.style.bottom = bottom + 5 + "px";
+
+    if (bottom > 600) {
+      bullet.remove();
+      clearInterval(moveBullet);
+    }
+
+    document.querySelectorAll(".asteroid").forEach(asteroid => {
+      if (isColliding(bullet, asteroid)) {
+        asteroid.hits++;
+        bullet.remove();
+        clearInterval(moveBullet);
+        if (asteroid.hits >= 3) {
+          asteroid.remove();
+        }
+      }
+    });
+
+  }, 20);
+}
+
+function spawnAsteroid() {
+  let asteroid = document.createElement("div");
+  asteroid.classList.add("asteroid");
+  asteroid.style.left = Math.random() * 360 + "px";
+  asteroid.style.top = "0px";
+  asteroid.hits = 0;
+  game.appendChild(asteroid);
+
+  let moveAsteroid = setInterval(() => {
+    let top = parseInt(asteroid.style.top);
+    asteroid.style.top = top + asteroidSpeed + "px";
+
+    if (top > 600) {
+      asteroid.remove();
+      clearInterval(moveAsteroid);
+    }
+
+    if (isColliding(plane, asteroid)) {
+      alert("Game Over!");
+      location.reload();
+    }
+
+  }, 20);
+}
+
+function isColliding(a, b) {
+  let rect1 = a.getBoundingClientRect();
+  let rect2 = b.getBoundingClientRect();
+
+  return !(
+    rect1.top > rect2.bottom ||
+    rect1.bottom < rect2.top ||
+    rect1.right < rect2.left ||
+    rect1.left > rect2.right
+  );
+}
+
+setInterval(spawnAsteroid, 1500);
+
+setInterval(() => {
+  asteroidSpeed += 1;
+  console.log("Speed Increased!");
+}, 35000);
+
+</script>
+
+</body>
+</html>
