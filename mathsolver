@@ -1,0 +1,717 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+const esc = (s) =>
+  String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+const EXAMPLES = [
+  { label: "Quadratic", q: "Solve 2x² - 7x + 3 = 0" },
+  { label: "Derivative", q: "Find the derivative of f(x) = x³ - 4x² + 2x - 7" },
+  { label: "Integral", q: "Evaluate the integral of (3x² + 2x) dx" },
+  { label: "Trig", q: "If sin(θ) = 3/5, find cos(θ) and tan(θ)" },
+  { label: "Statistics", q: "Find mean, median and mode of: 4,7,2,9,4,1,7,4,8" },
+  { label: "Matrices", q: "Multiply A=[[1,2],[3,4]] and B=[[5,6],[7,8]]" },
+];
+
+const LOADING_MSGS = [
+  "Reading the problem…",
+  "Identifying math topic…",
+  "Computing step-by-step solution…",
+  "Generating explanation…",
+  "Fetching YouTube suggestions…",
+];
+
+// ── styles (CSS-in-JS string injected once) ──────────────────────────────────
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:#0b0b12; --surf:#111119; --surf2:#191924; --bdr:#272737;
+  --acc:#7c6fff; --acc2:#ff6b8a; --acc3:#3ee87a;
+  --txt:#e6e6f0; --dim:#888899; --bright:#fff;
+  --card:#121220; --glow:rgba(124,111,255,.28);
+  --radius:14px;
+}
+.light {
+  --bg:#eeeef8; --surf:#fff; --surf2:#f4f4ff; --bdr:#d8d8ee;
+  --acc:#5a4fea; --acc2:#e0344f; --acc3:#18b854;
+  --txt:#1a1a30; --dim:#5f5fa0; --bright:#000;
+  --card:#f8f8ff; --glow:rgba(90,79,234,.13);
+}
+
+body { font-family:'Space Grotesk',sans-serif; background:var(--bg); color:var(--txt); min-height:100vh; overflow-x:hidden; }
+
+/* grid bg */
+body::before {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background-image:linear-gradient(var(--bdr) 1px,transparent 1px),linear-gradient(90deg,var(--bdr) 1px,transparent 1px);
+  background-size:58px 58px; opacity:.25;
+}
+
+/* NAV */
+.nav {
+  position:fixed; top:0; left:0; right:0; z-index:100;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 36px;
+  background:rgba(11,11,18,.84); backdrop-filter:blur(18px);
+  border-bottom:1px solid var(--bdr);
+}
+.light .nav { background:rgba(238,238,248,.86); }
+.nav-logo {
+  font-family:'Playfair Display',serif; font-size:1.45rem; font-weight:700;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+}
+.nav-r { display:flex; gap:10px; align-items:center; }
+.nbtn {
+  background:none; border:1px solid var(--bdr); color:var(--txt);
+  padding:7px 16px; border-radius:8px; cursor:pointer; font-family:inherit; font-size:.83rem;
+  transition:.18s;
+}
+.nbtn:hover { border-color:var(--acc); color:var(--acc); }
+.theme-btn {
+  background:none; border:1px solid var(--bdr); color:var(--txt);
+  width:36px; height:36px; border-radius:8px; cursor:pointer; font-size:1rem;
+  display:flex; align-items:center; justify-content:center; transition:.18s;
+}
+.theme-btn:hover { border-color:var(--acc); }
+
+/* LAYOUT */
+.page { position:relative; z-index:1; padding-top:72px; }
+
+/* HERO */
+.hero { text-align:center; padding:70px 16px 50px; max-width:860px; margin:0 auto; }
+.badge {
+  display:inline-flex; align-items:center; gap:7px;
+  background:rgba(124,111,255,.1); border:1px solid rgba(124,111,255,.3);
+  padding:5px 15px; border-radius:100px; font-size:.78rem; color:var(--acc); margin-bottom:22px;
+  animation:fadeD .6s ease both;
+}
+.hero-h1 {
+  font-family:'Playfair Display',serif;
+  font-size:clamp(2.2rem,5.5vw,4rem); line-height:1.15; color:var(--bright);
+  animation:fadeD .6s .1s ease both;
+}
+.hero-h1 em { font-style:italic; color:var(--acc); }
+.hero-sub {
+  font-size:1.05rem; color:var(--dim); margin:18px auto 0; max-width:520px; line-height:1.7;
+  animation:fadeD .6s .2s ease both;
+}
+.tags { display:flex; flex-wrap:wrap; gap:7px; justify-content:center; margin-top:24px; animation:fadeD .6s .3s ease both; }
+.tag { background:var(--surf2); border:1px solid var(--bdr); padding:4px 13px; border-radius:100px; font-size:.76rem; color:var(--dim); }
+
+/* CARD */
+.card-wrap { max-width:840px; margin:0 auto; padding:0 16px 70px; animation:fadeU .65s .4s ease both; }
+.solver-card { background:var(--card); border:1px solid var(--bdr); border-radius:20px; overflow:hidden; box-shadow:0 0 55px var(--glow); }
+
+/* TABS */
+.tabs { display:flex; border-bottom:1px solid var(--bdr); background:var(--surf); }
+.tab-btn {
+  flex:1; padding:15px; cursor:pointer; background:none; border:none; color:var(--dim);
+  font-family:inherit; font-size:.88rem; font-weight:500;
+  display:flex; align-items:center; justify-content:center; gap:7px;
+  border-bottom:2px solid transparent; transition:.18s;
+}
+.tab-btn.on { color:var(--acc); border-bottom-color:var(--acc); background:var(--surf2); }
+.tab-btn:hover:not(.on) { color:var(--txt); background:var(--surf2); }
+.tab-pane { display:none; padding:26px; }
+.tab-pane.on { display:block; }
+
+/* INPUTS */
+.lbl { font-size:.75rem; color:var(--dim); font-weight:600; letter-spacing:.05em; text-transform:uppercase; margin-bottom:8px; display:block; }
+.math-ta {
+  width:100%; background:var(--surf2); border:1px solid var(--bdr); color:var(--txt);
+  padding:15px 17px; border-radius:12px; font-family:'JetBrains Mono',monospace; font-size:.97rem;
+  resize:vertical; min-height:108px; outline:none; transition:.18s; line-height:1.65;
+}
+.math-ta:focus { border-color:var(--acc); box-shadow:0 0 0 3px var(--glow); }
+.math-ta::placeholder { color:var(--dim); font-family:'Space Grotesk',sans-serif; }
+.quick-row { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 20px; }
+.qbtn {
+  background:var(--surf2); border:1px solid var(--bdr); color:var(--dim);
+  padding:6px 13px; border-radius:8px; cursor:pointer; font-family:inherit; font-size:.8rem; transition:.18s;
+}
+.qbtn:hover { border-color:var(--acc); color:var(--acc); background:rgba(124,111,255,.08); }
+
+/* UPLOAD */
+.drop-zone {
+  border:2px dashed var(--bdr); border-radius:15px; padding:44px 16px;
+  text-align:center; cursor:pointer; transition:.22s; background:var(--surf2); position:relative;
+}
+.drop-zone:hover, .drop-zone.drag { border-color:var(--acc); background:rgba(124,111,255,.05); }
+.drop-input { position:absolute; inset:0; opacity:0; cursor:pointer; }
+.drop-icon { font-size:2.4rem; margin-bottom:14px; display:block; }
+.drop-title { font-size:1rem; font-weight:600; color:var(--bright); margin-bottom:5px; }
+.drop-sub { color:var(--dim); font-size:.83rem; }
+.preview-img { max-width:100%; border-radius:10px; border:1px solid var(--bdr); max-height:260px; object-fit:contain; margin-top:18px; display:block; }
+.ocr-box { margin-top:14px; background:var(--surf2); border:1px solid var(--bdr); border-radius:10px; padding:13px 15px; }
+.ocr-lbl { font-size:.72rem; color:var(--acc); font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
+.ocr-val { font-family:'JetBrains Mono',monospace; font-size:.88rem; color:var(--txt); }
+
+/* SOLVE BTN */
+.solve-btn {
+  width:100%; padding:15px; border-radius:12px; border:none; cursor:pointer;
+  font-family:inherit; font-size:.97rem; font-weight:600;
+  background:linear-gradient(135deg,var(--acc),#a855f7);
+  color:#fff; display:flex; align-items:center; justify-content:center; gap:9px;
+  transition:.28s; letter-spacing:.02em;
+  box-shadow:0 4px 22px rgba(124,111,255,.35);
+  margin-top:4px;
+}
+.solve-btn:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 8px 30px rgba(124,111,255,.5); }
+.solve-btn:disabled { opacity:.55; cursor:not-allowed; }
+
+/* ERROR */
+.err-box {
+  background:rgba(255,107,138,.08); border:1px solid rgba(255,107,138,.3);
+  border-radius:10px; padding:13px 16px; color:var(--acc2); font-size:.87rem; margin-top:12px;
+}
+
+/* LOADING */
+.loading-pane { text-align:center; padding:54px 16px; }
+.spinner {
+  width:52px; height:52px; border:3px solid var(--bdr); border-top-color:var(--acc);
+  border-radius:50%; margin:0 auto 18px; animation:spin .8s linear infinite;
+}
+.loading-msg { color:var(--dim); font-size:.93rem; margin-bottom:14px; }
+.loading-steps { display:flex; flex-direction:column; gap:5px; align-items:center; }
+.lstep { font-size:.78rem; color:var(--acc3); animation:fadeIn .5s ease both; }
+
+/* RESULTS */
+.res-sec { padding:26px; border-top:1px solid var(--bdr); }
+.res-hdr { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+.res-ico {
+  width:34px; height:34px; border-radius:9px;
+  display:flex; align-items:center; justify-content:center; font-size:1.05rem; flex-shrink:0;
+}
+.ico-g { background:rgba(62,232,122,.15); }
+.ico-b { background:rgba(124,111,255,.15); }
+.ico-o { background:rgba(255,165,0,.15); }
+.ico-r { background:rgba(255,107,138,.15); }
+.res-title { font-size:.97rem; font-weight:600; color:var(--bright); }
+.res-sub { font-size:.78rem; color:var(--dim); }
+
+.ans-box {
+  background:linear-gradient(135deg,rgba(124,111,255,.1),rgba(168,85,247,.07));
+  border:1px solid rgba(124,111,255,.28); border-radius:13px; padding:18px 22px;
+}
+.ans-lbl { font-size:.72rem; color:var(--acc); font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-bottom:9px; }
+.ans-val { font-size:1.3rem; font-weight:700; color:var(--bright); font-family:'JetBrains Mono',monospace; word-break:break-word; }
+
+/* STEPS */
+.steps-list { display:flex; flex-direction:column; gap:11px; }
+.step-item {
+  display:flex; gap:13px; background:var(--surf2); border:1px solid var(--bdr);
+  border-radius:12px; padding:15px; animation:fadeU .35s ease both;
+}
+.step-num {
+  width:27px; height:27px; border-radius:7px; background:var(--acc); color:#fff;
+  display:flex; align-items:center; justify-content:center; font-size:.78rem; font-weight:700; flex-shrink:0; margin-top:1px;
+}
+.step-body { flex:1; min-width:0; }
+.step-t { font-weight:600; color:var(--bright); margin-bottom:3px; font-size:.92rem; }
+.step-d { color:var(--dim); font-size:.85rem; line-height:1.62; }
+.step-math { margin-top:9px; background:var(--bg); border-radius:7px; padding:9px 13px; font-size:.88rem; overflow-x:auto; color:var(--txt); }
+
+/* EXPLANATION */
+.expl-txt { color:var(--txt); line-height:1.8; font-size:.93rem; }
+.chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:15px; }
+.chip {
+  background:rgba(62,232,122,.09); border:1px solid rgba(62,232,122,.24);
+  color:var(--acc3); padding:4px 13px; border-radius:100px; font-size:.78rem;
+}
+
+/* VIDEOS */
+.vid-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:13px; }
+.vid-card {
+  background:var(--surf2); border:1px solid var(--bdr); border-radius:12px;
+  overflow:hidden; transition:.22s; cursor:pointer; text-decoration:none; color:inherit; display:block;
+}
+.vid-card:hover { border-color:var(--acc2); transform:translateY(-3px); box-shadow:0 8px 22px rgba(0,0,0,.28); }
+.vid-thumb {
+  width:100%; aspect-ratio:16/9; background:linear-gradient(135deg,#181826,#12122a);
+  display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden;
+}
+.vid-thumb img { width:100%; height:100%; object-fit:cover; position:absolute; inset:0; }
+.vid-play {
+  position:absolute; inset:0; background:rgba(0,0,0,.32);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; transition:.18s; z-index:2;
+}
+.vid-card:hover .vid-play { opacity:1; }
+.play-circle { width:42px; height:42px; background:rgba(255,50,80,.9); border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:1rem; padding-left:3px; }
+.vid-info { padding:11px; }
+.vid-title { font-size:.82rem; font-weight:600; color:var(--bright); line-height:1.38; margin-bottom:3px; }
+.vid-ch { font-size:.73rem; color:var(--dim); }
+
+/* HISTORY */
+.hist-sec { max-width:840px; margin:0 auto; padding:0 16px 70px; }
+.sec-title { font-family:'Playfair Display',serif; font-size:1.5rem; color:var(--bright); margin-bottom:18px; display:flex; align-items:center; gap:10px; }
+.hist-list { display:flex; flex-direction:column; gap:9px; }
+.hist-item {
+  background:var(--card); border:1px solid var(--bdr); border-radius:11px;
+  padding:13px 16px; cursor:pointer; transition:.18s;
+  display:flex; align-items:center; gap:13px;
+}
+.hist-item:hover { border-color:var(--acc); }
+.hist-body { flex:1; min-width:0; }
+.hist-q { font-size:.86rem; font-weight:500; color:var(--bright); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hist-time { font-size:.72rem; color:var(--dim); margin-top:2px; }
+.hist-badge { font-size:.73rem; background:rgba(124,111,255,.15); color:var(--acc); padding:4px 10px; border-radius:100px; flex-shrink:0; }
+.hist-empty { text-align:center; padding:36px; color:var(--dim); font-size:.88rem; }
+
+.divider { height:1px; background:var(--bdr); }
+
+/* ANIMATIONS */
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes fadeD { from{opacity:0;transform:translateY(-14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeU { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+
+@media(max-width:600px){
+  .nav{padding:12px 16px}
+  .hero{padding:44px 12px 36px}
+  .card-wrap{padding:0 10px 55px}
+  .tab-pane{padding:16px}
+  .res-sec{padding:16px}
+  .vid-grid{grid-template-columns:1fr}
+}
+`;
+
+// ── KaTeX loader ──────────────────────────────────────────────────────────────
+function useKatex() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (window.katex) { setReady(true); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js";
+    s.onload = () => {
+      const s2 = document.createElement("script");
+      s2.src = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js";
+      s2.onload = () => setReady(true);
+      document.head.appendChild(s2);
+    };
+    document.head.appendChild(s);
+  }, []);
+  return ready;
+}
+
+function renderKatex(el) {
+  if (!el || !window.renderMathInElement) return;
+  try {
+    window.renderMathInElement(el, {
+      delimiters: [
+        { left: "\\(", right: "\\)", display: false },
+        { left: "\\[", right: "\\]", display: true },
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false },
+      ],
+      throwOnError: false,
+    });
+  } catch (_) {}
+}
+
+// ── CALL ANTHROPIC ────────────────────────────────────────────────────────────
+async function callClaude(messages, system) {
+  const res = await fetch(ANTHROPIC_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1800,
+      system,
+      messages,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  const d = await res.json();
+  return d.content.map((c) => c.text || "").join("").trim();
+}
+
+// ── MAIN COMPONENT ────────────────────────────────────────────────────────────
+export default function MathGenius() {
+  const katexReady = useKatex();
+  const [theme, setTheme] = useState("dark");
+  const [tab, setTab] = useState("type");
+  const [input, setInput] = useState("");
+  const [imageB64, setImageB64] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [dragging, setDragging] = useState(false);
+
+  const [phase, setPhase] = useState("idle"); // idle | loading | result | error
+  const [loadStep, setLoadStep] = useState(0);
+  const [result, setResult] = useState(null);
+  const [ocrText, setOcrText] = useState("");
+  const [error, setError] = useState("");
+
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mg_history") || "[]"); } catch { return []; }
+  });
+
+  const resultsRef = useRef(null);
+  const fileRef = useRef(null);
+  const intervalRef = useRef(null);
+
+  // inject CSS once
+  useEffect(() => {
+    const id = "mg-css";
+    if (!document.getElementById(id)) {
+      const el = document.createElement("style");
+      el.id = id; el.textContent = CSS;
+      document.head.appendChild(el);
+    }
+  }, []);
+
+  // re-render KaTeX when result changes
+  useEffect(() => {
+    if (result && katexReady) {
+      setTimeout(() => renderKatex(resultsRef.current), 150);
+    }
+  }, [result, katexReady]);
+
+  // loading step ticker
+  useEffect(() => {
+    if (phase === "loading") {
+      setLoadStep(0);
+      let i = 0;
+      intervalRef.current = setInterval(() => {
+        i++;
+        setLoadStep(i);
+        if (i >= LOADING_MSGS.length - 1) clearInterval(intervalRef.current);
+      }, 900);
+    } else {
+      clearInterval(intervalRef.current);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [phase]);
+
+  const saveHistory = useCallback((problem, topic, answer) => {
+    if (!problem) return;
+    const item = {
+      problem: String(problem).slice(0, 110),
+      topic: topic || "Math",
+      answer: answer || "",
+      time: new Date().toLocaleString(),
+    };
+    setHistory((prev) => {
+      const next = [item, ...prev].slice(0, 20);
+      try { localStorage.setItem("mg_history", JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
+
+  const processFile = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImageB64(e.target.result);
+      setImagePreview(e.target.result);
+      setError("");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const SYSTEM = `You are an expert math teacher for grades 1–12.
+Solve math problems fully, step by step.
+IMPORTANT: Respond with ONLY a raw JSON object — no markdown fences, no extra text, no explanation outside JSON.
+The JSON must follow the exact schema given. Invalid JSON will break the app.`;
+
+  const SCHEMA = `{
+  "extracted_problem": "string — the exact problem text",
+  "topic": "string — e.g. Algebra, Calculus, Trigonometry, Geometry, Statistics",
+  "subtopic": "string — specific concept",
+  "answer": "string — concise final answer",
+  "steps": [
+    { "title": "string", "description": "string", "math": "string — LaTeX without delimiters, or empty string" }
+  ],
+  "explanation": "string — 2-3 sentences on the method/concept",
+  "concepts": ["string"],
+  "youtube_queries": ["string — 4 descriptive YouTube search queries"]
+}`;
+
+  async function solve(text, b64) {
+    setPhase("loading");
+    setError("");
+    setResult(null);
+    setOcrText("");
+
+    try {
+      const content = [];
+      if (b64) {
+        const mime = b64.split(";")[0].split(":")[1] || "image/jpeg";
+        content.push({ type: "image", source: { type: "base64", media_type: mime, data: b64.split(",")[1] } });
+        content.push({ type: "text", text: `Extract the math problem from this image and solve it completely.\nRespond with ONLY this JSON schema:\n${SCHEMA}` });
+      } else {
+        content.push({ type: "text", text: `Solve this math problem: "${text}"\n\nRespond with ONLY this JSON schema:\n${SCHEMA}` });
+      }
+
+      const raw = await callClaude([{ role: "user", content }], SYSTEM);
+
+      // robust JSON extraction
+      let parsed;
+      const cleaned = raw.replace(/```(?:json)?|```/g, "").trim();
+      const start = cleaned.indexOf("{");
+      const end = cleaned.lastIndexOf("}");
+      if (start === -1 || end === -1) throw new Error("No JSON in response. Please try again.");
+      parsed = JSON.parse(cleaned.slice(start, end + 1));
+
+      if (!parsed.answer && !parsed.steps) throw new Error("Incomplete response. Please try again.");
+
+      if (b64 && parsed.extracted_problem) setOcrText(parsed.extracted_problem);
+
+      setResult(parsed);
+      setPhase("result");
+      saveHistory(text || parsed.extracted_problem, parsed.topic, parsed.answer);
+
+      setTimeout(() => {
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    } catch (e) {
+      setError(e.message || "Something went wrong. Please try again.");
+      setPhase("error");
+    }
+  }
+
+  function handleSolveTyped() {
+    const t = input.trim();
+    if (!t) { setError("Please enter a math problem first."); setPhase("error"); return; }
+    solve(t, null);
+  }
+
+  function handleSolveImage() {
+    if (!imageB64) { setError("Please upload an image first."); setPhase("error"); return; }
+    solve(null, imageB64);
+  }
+
+  const light = theme === "light";
+  const FALLBACK_IDS = ["tGFiCslE8bc", "IWigaRMiKHs", "mFnzSlLBXnQ", "IlNAJl36-10", "Qyd_v3DGzTM"];
+
+  return (
+    <div className={light ? "light" : ""} style={{ minHeight: "100vh" }}>
+      {/* NAV */}
+      <nav className="nav">
+        <div className="nav-logo">MathGenius</div>
+        <div className="nav-r">
+          <button className="nbtn" onClick={() => document.getElementById("hist-anchor")?.scrollIntoView({ behavior: "smooth" })}>📚 History</button>
+          <button className="theme-btn" onClick={() => setTheme(light ? "dark" : "light")}>{light ? "🌙" : "☀️"}</button>
+        </div>
+      </nav>
+
+      <div className="page">
+        {/* HERO */}
+        <section className="hero">
+          <div className="badge">⚡ AI-Powered · Grade 1–12</div>
+          <h1 className="hero-h1">Solve Any Math Problem<br /><em>Instantly</em></h1>
+          <p className="hero-sub">Type or photograph any problem — get step-by-step solutions, clear explanations, and YouTube lessons.</p>
+          <div className="tags">
+            {["Algebra","Trigonometry","Calculus","Geometry","Statistics","Matrices","Probability","Quadratics"].map(t => (
+              <span key={t} className="tag">{t}</span>
+            ))}
+          </div>
+        </section>
+
+        {/* SOLVER CARD */}
+        <div className="card-wrap">
+          <div className="solver-card">
+            {/* TABS */}
+            <div className="tabs">
+              <button className={`tab-btn ${tab === "type" ? "on" : ""}`} onClick={() => setTab("type")}>✏️ Type Problem</button>
+              <button className={`tab-btn ${tab === "image" ? "on" : ""}`} onClick={() => setTab("image")}>📷 Upload Image</button>
+            </div>
+
+            {/* TYPE PANE */}
+            <div className={`tab-pane ${tab === "type" ? "on" : ""}`}>
+              <label className="lbl">Enter your math problem</label>
+              <textarea
+                className="math-ta"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder={"e.g. Solve x² + 5x + 6 = 0\nor: Find the derivative of f(x) = 3x³ - 2x\nor: If sin(θ) = 3/5, find cos(θ) and tan(θ)"}
+                onKeyDown={e => { if (e.ctrlKey && e.key === "Enter") handleSolveTyped(); }}
+              />
+              <div className="quick-row">
+                {EXAMPLES.map(ex => (
+                  <button key={ex.label} className="qbtn" onClick={() => setInput(ex.q)}>{ex.label}</button>
+                ))}
+              </div>
+              {phase === "error" && tab === "type" && <div className="err-box">⚠️ {error}</div>}
+              <button className="solve-btn" onClick={handleSolveTyped} disabled={phase === "loading"}>
+                <span>✨</span><span>{phase === "loading" ? "Solving…" : "Solve Problem"}</span>
+              </button>
+            </div>
+
+            {/* IMAGE PANE */}
+            <div className={`tab-pane ${tab === "image" ? "on" : ""}`}>
+              <div
+                className={`drop-zone${dragging ? " drag" : ""}`}
+                onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={e => { e.preventDefault(); setDragging(false); processFile(e.dataTransfer.files[0]); }}
+                onClick={() => fileRef.current?.click()}
+              >
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => processFile(e.target.files[0])} />
+                <span className="drop-icon">📸</span>
+                <div className="drop-title">Drop your image here</div>
+                <div className="drop-sub">or click to browse — PNG, JPG, JPEG supported</div>
+              </div>
+
+              {imagePreview && (
+                <>
+                  <img src={imagePreview} className="preview-img" alt="Preview" />
+                  {ocrText && (
+                    <div className="ocr-box">
+                      <div className="ocr-lbl">📝 AI Vision — Extracted Text</div>
+                      <div className="ocr-val">{ocrText}</div>
+                    </div>
+                  )}
+                </>
+              )}
+              {phase === "error" && tab === "image" && <div className="err-box" style={{ marginTop: 12 }}>⚠️ {error}</div>}
+              <button className="solve-btn" style={{ marginTop: 18 }} onClick={handleSolveImage} disabled={phase === "loading"}>
+                <span>🔍</span><span>{phase === "loading" ? "Solving…" : "Extract & Solve"}</span>
+              </button>
+            </div>
+
+            {/* LOADING */}
+            {phase === "loading" && (
+              <div className="loading-pane">
+                <div className="spinner" />
+                <div className="loading-msg">{LOADING_MSGS[Math.min(loadStep, LOADING_MSGS.length - 1)]}</div>
+                <div className="loading-steps">
+                  {LOADING_MSGS.slice(0, loadStep).map((m, i) => (
+                    <div key={i} className="lstep" style={{ animationDelay: "0s" }}>✓ {m}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* RESULTS */}
+            {phase === "result" && result && (
+              <div ref={resultsRef}>
+                {/* ANSWER */}
+                <div className="res-sec">
+                  <div className="res-hdr">
+                    <div className="res-ico ico-g">✅</div>
+                    <div>
+                      <div className="res-title">Answer</div>
+                      <div className="res-sub">{result.topic || "Math"}{result.subtopic ? ` · ${result.subtopic}` : ""}</div>
+                    </div>
+                  </div>
+                  <div className="ans-box">
+                    <div className="ans-lbl">Final Answer</div>
+                    <div className="ans-val">{result.answer || "See steps below"}</div>
+                  </div>
+                </div>
+
+                <div className="divider" />
+
+                {/* STEPS */}
+                <div className="res-sec">
+                  <div className="res-hdr">
+                    <div className="res-ico ico-b">📐</div>
+                    <div>
+                      <div className="res-title">Step-by-Step Solution</div>
+                      <div className="res-sub">Follow along with each step</div>
+                    </div>
+                  </div>
+                  <div className="steps-list">
+                    {(result.steps || []).map((s, i) => (
+                      <div key={i} className="step-item" style={{ animationDelay: `${i * 0.07}s` }}>
+                        <div className="step-num">{i + 1}</div>
+                        <div className="step-body">
+                          <div className="step-t">{s.title}</div>
+                          <div className="step-d">{s.description}</div>
+                          {s.math && <div className="step-math">\({s.math}\)</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="divider" />
+
+                {/* EXPLANATION */}
+                <div className="res-sec">
+                  <div className="res-hdr">
+                    <div className="res-ico ico-o">💡</div>
+                    <div>
+                      <div className="res-title">Explanation</div>
+                      <div className="res-sub">Understand the concept</div>
+                    </div>
+                  </div>
+                  <div className="expl-txt">{result.explanation}</div>
+                  <div className="chips">
+                    {(result.concepts || []).map((c, i) => <span key={i} className="chip">{c}</span>)}
+                  </div>
+                </div>
+
+                <div className="divider" />
+
+                {/* VIDEOS */}
+                <div className="res-sec">
+                  <div className="res-hdr">
+                    <div className="res-ico ico-r">▶️</div>
+                    <div>
+                      <div className="res-title">Learn More on YouTube</div>
+                      <div className="res-sub">Click any card to search YouTube</div>
+                    </div>
+                  </div>
+                  <div className="vid-grid">
+                    {(result.youtube_queries || []).slice(0, 4).map((q, i) => {
+                      const vid = FALLBACK_IDS[i % FALLBACK_IDS.length];
+                      return (
+                        <a key={i} className="vid-card" href={`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`} target="_blank" rel="noopener noreferrer">
+                          <div className="vid-thumb">
+                            <img src={`https://img.youtube.com/vi/${vid}/mqdefault.jpg`} alt="" onError={e => e.target.style.display = "none"} />
+                            <div className="vid-play"><div className="play-circle">▶</div></div>
+                          </div>
+                          <div className="vid-info">
+                            <div className="vid-title">{q}</div>
+                            <div className="vid-ch">🎬 Search on YouTube</div>
+                          </div>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* HISTORY */}
+        <div className="hist-sec" id="hist-anchor">
+          <div className="sec-title">📚 <span>Recent Problems</span></div>
+          {history.length === 0
+            ? <div className="hist-empty">No problems solved yet. Try one above!</div>
+            : (
+              <div className="hist-list">
+                {history.map((item, i) => (
+                  <div key={i} className="hist-item" onClick={() => { setInput(item.problem); setTab("type"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                    <span style={{ fontSize: "1.2rem" }}>🔢</span>
+                    <div className="hist-body">
+                      <div className="hist-q">{item.problem}</div>
+                      <div className="hist-time">{item.time}</div>
+                    </div>
+                    <div className="hist-badge">{item.topic}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
